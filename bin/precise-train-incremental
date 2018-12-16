@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+docker run -it \
+       -u $(id -u):$(id -g) \
+       -v "$HOME:$HOME" \
+       -w "$(pwd)" \
+       synesthesiam/mycroft-precise:amd64 \
+       precise-train-incremental \
+       -r /pbsounds \
+       "$@"

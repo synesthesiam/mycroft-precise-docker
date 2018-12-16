@@ -1,4 +1,4 @@
 .PHONY: docker
 
 docker:
-	docker build . -t mycroft-precise
+	docker build . -t synesthesiam/mycroft-precise:amd64

@@ -1,0 +1,4 @@
+.cache/
+__pycache__/
+models/okay-rhasspy/not-wake-word/generated/
+models/okay-rhasspy/test/not-wake-word/
