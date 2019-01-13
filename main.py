@@ -1,25 +1,33 @@
 #!/usr/bin/env python3
 import os
+import io
+import json
+import wave
 import argparse
 import subprocess
 import threading
+import logging
+logging.basicConfig(level=logging.DEBUG)
 
 from precise_runner import PreciseEngine, PreciseRunner
-from nanomsg import Socket, SUB, SUB_SUBSCRIBE, PUSH
+import paho.mqtt.client as mqtt
 
 def main():
     # Parse arguments
     parser = argparse.ArgumentParser(description='mycroft-precise')
-    parser.add_argument('--pub-address',
-                        help='nanomsg address of PUB socket (default=tcp://127.0.0.1:5000)',
-                        type=str, default='tcp://127.0.0.1:5000')
+    parser.add_argument('--host',
+                        help='MQTT host (default=localhost)',
+                        type=str, default='localhost')
 
-    parser.add_argument('--pull-address',
-                        help='nanomsg address of PULL socket (default=tcp://127.0.0.1:5001)',
-                        type=str, default='tcp://127.0.0.1:5001')
+    parser.add_argument('--port',
+                        help='MQTT port (default=1883)',
+                        type=int, default=1883)
 
-    parser.add_argument('--payload', help='Payload string to send when wake word is detected (default=OK)',
-                        type=str, default='OK')
+    parser.add_argument('--site-id', help='Hermes siteId (default=default)',
+                        type=str, default='default')
+
+    parser.add_argument('--wakeword-id', help='Hermes wakewordId (default=default)',
+                        type=str, default='default')
 
     parser.add_argument('--model',
                         type=str,
@@ -37,53 +45,79 @@ def main():
     parser.add_argument('--feedback', help='Show printed feedback', action='store_true')
     args = parser.parse_args()
 
+    topic_audio_frame = 'hermes/audioServer/%s/audioFrame' % args.site_id
+    topic_hotword_detected = 'hermes/hotword/%s/detected' % args.wakeword_id
+
     # Create runner
     engine = PreciseEngine('precise-engine', args.model)
     stream = ByteStream()
 
-    with Socket(PUSH) as push_socket:
-        # Response is sent via nanomsg
-        push_socket.connect(args.pull_address)
+    client = mqtt.Client()
+    first_frame = True
 
-        def on_activation():
-            # Hotword detected
-            if args.feedback:
-                print('!', end='', flush=True)
+    def on_activation():
+        nonlocal first_frame
+        if args.feedback:
+            print('!', end='', flush=True)
 
-            push_socket.send(payload)  # response
+        logging.debug('Hotword detected!')
+        payload = json.dumps({
+            'siteId': args.site_id,
+            'modelId': args.model,
+            'modelVersion': '',
+            'modelType': 'personal',
+            'currentSensitivity': args.sensitivity
+        }).encode()
 
-        runner = PreciseRunner(engine, stream=stream,
-                               sensitivity=args.sensitivity,
-                               trigger_level=args.trigger_level,
-                               on_activation=on_activation)
+        client.publish(topic_hotword_detected, payload)
+        first_frame = True
 
-        runner.start()
+    runner = PreciseRunner(engine, stream=stream,
+                            sensitivity=args.sensitivity,
+                            trigger_level=args.trigger_level,
+                            on_activation=on_activation)
 
-        # Do detection
+    # Set up MQTT
+    def on_connect(client, userdata, flags, rc):
+        client.subscribe(topic_audio_frame)
+        logging.debug('Connected to %s' % args.host)
+
+    def on_message(client, userdata, message):
+        nonlocal first_frame
         try:
-            payload = args.payload.encode()
+            if message.topic == topic_audio_frame:
+                if first_frame:
+                    logging.debug('Receiving audio data')
+                    first_frame = False
 
-            # Receive raw audio data via nanomsg
-            with Socket(SUB) as sub_socket:
-                sub_socket.connect(args.pub_address)
-                sub_socket.set_string_option(SUB, SUB_SUBSCRIBE, '')
+                if args.feedback:
+                    print('.', end='', flush=True)
 
-                while True:
-                    data = sub_socket.recv()  # audio data
-                    if args.feedback:
-                        print('.', end='', flush=True)
+                # Extract audio data
+                with io.BytesIO(message.payload) as wav_buffer:
+                    with wave.open(wav_buffer, mode='rb') as wav_file:
+                        audio_data = wav_file.readframes(wav_file.getnframes())
+                        stream.write(audio_data)
+        except Exception as e:
+            logging.exception('on_message')
 
-                    # Write to in-memory stream
-                    stream.write(data)
+    client.on_connect = on_connect
+    client.on_message = on_message
+    client.connect(args.host, args.port)
 
-        except KeyboardInterrupt:
-            pass
+    runner.start()
 
-        try:
-            stream.close()
-            runner.stop()
-        except:
-            pass
+    try:
+        logging.info('Listening')
+        client.loop_forever()
+    except KeyboardInterrupt:
+        pass
+
+    try:
+        stream.close()
+        runner.stop()
+    except:
+        pass
 
 # -----------------------------------------------------------------------------
 

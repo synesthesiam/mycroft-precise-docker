@@ -13,6 +13,7 @@ RUN echo 'http://dl-cdn.alpinelinux.org/alpine/edge/testing' >> /etc/apk/reposit
 RUN apk update && apk add --no-cache hdf5-dev
 
 RUN pip3 install --no-cache-dir wheel
+RUN pip3 install --no-cache-dir paho-mqtt
 
 # Install tensorflow
 COPY /etc/tensorflow-1.8.0-cp36-cp36m-linux_x86_64.whl /
